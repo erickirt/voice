@@ -2,12 +2,12 @@
 //!
 //! Ported from kokoro/model.py
 
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Error, Module, Result, Tensor};
 use candle_nn::{self as nn, VarBuilder};
 
 use crate::albert::CustomAlbert;
 use crate::config::ModelConfig;
-use crate::istftnet::Decoder;
+use crate::istftnet::{Decoder, SynthesisMode};
 use crate::modules::{ProsodyPredictor, TextEncoder};
 
 /// The top-level Kokoro-82M model.
@@ -86,6 +86,21 @@ impl KModel {
         speed: f32,
         device: &Device,
     ) -> Result<Tensor> {
+        self.forward_with_mode(input_ids, ref_s, speed, device, SynthesisMode::Stochastic)
+    }
+
+    /// Run inference with explicit synthesis-mode control.
+    ///
+    /// Deterministic mode removes the decoder's random harmonic phase and noise
+    /// sources, making output reproducible on CPU and GPU backends.
+    pub fn forward_with_mode(
+        &self,
+        input_ids: &[i64],
+        ref_s: &Tensor,
+        speed: f32,
+        device: &Device,
+        mode: SynthesisMode,
+    ) -> Result<Tensor> {
         // Pad with BOS=0 and EOS=0
         let mut padded = Vec::with_capacity(input_ids.len() + 2);
         padded.push(0i64);
@@ -93,12 +108,7 @@ impl KModel {
         padded.push(0i64);
 
         let seq_len = padded.len();
-        assert!(
-            seq_len <= self.context_length,
-            "Input too long: {} > {}",
-            seq_len,
-            self.context_length
-        );
+        validate_context_length(seq_len, self.context_length)?;
 
         let input_ids_t = Tensor::new(&padded[..], device)?.unsqueeze(0)?; // [1, T]
         let input_lengths = Tensor::new(&[seq_len as i64][..], device)?; // [1]
@@ -220,11 +230,22 @@ impl KModel {
 
         // Decoder
         let s_acoustic = ref_s.narrow(1, 0, 128)?; // [1, 128]
-        let audio = self.decoder.forward(&asr, &f0_pred, &n_pred, &s_acoustic)?;
+        let audio = self
+            .decoder
+            .forward_with_mode(&asr, &f0_pred, &n_pred, &s_acoustic, mode)?;
 
         // audio: [1, 1, samples] -> [samples]
         audio.squeeze(0)?.squeeze(0)
     }
+}
+
+fn validate_context_length(seq_len: usize, context_length: usize) -> Result<()> {
+    if seq_len > context_length {
+        return Err(Error::Msg(format!(
+            "Input too long: {seq_len} > {context_length}"
+        )));
+    }
+    Ok(())
 }
 
 fn suppress_boundary_token_durations(mut durations: Vec<i64>) -> Vec<i64> {
@@ -240,7 +261,18 @@ fn suppress_boundary_token_durations(mut durations: Vec<i64>) -> Vec<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::suppress_boundary_token_durations;
+    use super::{suppress_boundary_token_durations, validate_context_length};
+
+    #[test]
+    fn context_length_allows_equal_length() {
+        assert!(validate_context_length(510, 510).is_ok());
+    }
+
+    #[test]
+    fn context_length_rejects_overlong_input() {
+        let err = validate_context_length(511, 510).unwrap_err();
+        assert!(err.to_string().contains("Input too long: 511 > 510"));
+    }
 
     #[test]
     fn test_suppresses_bos_eos_duration_frames() {

@@ -29,6 +29,7 @@ use std::time::Instant;
 
 use rodio::microphone::MicrophoneBuilder;
 use rodio::{buffer::SamplesBuffer, DeviceSinkBuilder, Player};
+use voice_stream::InterleavedMonoMixer;
 
 use crate::{INTERRUPTED, QUIET};
 
@@ -499,7 +500,7 @@ fn start_mic_drain(
     channels: u16,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let ch = channels.max(1) as usize;
+        let mut mixer = InterleavedMonoMixer::new(channels as usize);
         let mut chunk_peak: f32 = 0.0;
         let mut sample_count = 0usize;
 
@@ -512,13 +513,8 @@ fn start_mic_drain(
             chunk_peak = chunk_peak.max(abs);
             sample_count += 1;
 
-            // For multi-channel, mix to mono by averaging
-            if ch == 1 {
-                buffer.lock().unwrap().push(sample);
-            } else if sample_count % ch == 0 {
-                // We get interleaved samples — just take every ch-th sample
-                // (rodio's SampleTypeConverter already converts to f32)
-                buffer.lock().unwrap().push(sample);
+            if let Some(mono) = mixer.push(sample) {
+                buffer.lock().unwrap().push(mono);
             }
 
             // Update peak every ~100 samples to avoid atomic contention
@@ -1014,10 +1010,10 @@ pub fn record_continuous(
 /// Consume segments from the recording queue and transcribe each one.
 ///
 /// Spawns a thread that pulls segments, trims silence, resamples, and
-/// runs Moonshine inference. Results are sent to the returned receiver.
+/// runs Whisper inference. Results are sent to the returned receiver.
 ///
-/// The model and tokenizer are moved into this thread — they're not
-/// thread-safe, so single-threaded access is correct.
+/// The model is moved into this thread because single-threaded access is
+/// required by the decoder state.
 pub fn transcribe_segments(
     mut model: voice_stt::WhisperModel,
     segments: mpsc::Receiver<Segment>,
@@ -1146,7 +1142,7 @@ pub fn listen_continuous_for_rpc(
 /// Trim leading and trailing silence from audio samples.
 ///
 /// Bluetooth microphones (e.g. AirPods) can take ~0.5-1s before audio
-/// actually flows, producing a block of zeros at the start. Moonshine
+/// actually flows, producing a block of zeros at the start. Whisper
 /// is sensitive to the silence-to-speech ratio, especially on short
 /// recordings — trimming silence dramatically improves accuracy.
 fn trim_silence(samples: &[f32], sample_rate: u32) -> Vec<f32> {
