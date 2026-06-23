@@ -7112,6 +7112,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "voice-eval"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "voice-g2p",
+ "voice-stt",
+ "voice-tts",
+ "voice-voxtral",
+]
+
+[[package]]
 name = "voice-g2p"
 version = "0.2.2"
 dependencies = [
@@ -7175,6 +7188,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokenizers 0.21.4",
+ "voice-voxtral",
  "voice-whisper",
 ]
 
@@ -7212,6 +7226,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "voice-kokoro",
+]
+
+[[package]]
+name = "voice-voxtral"
+version = "0.1.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "fancy-regex",
+ "hf-hub",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
